@@ -78,23 +78,29 @@ def purchase_events(tx: pd.DataFrame, signal: dict | None = None) -> pd.DataFram
 
 
 def classify_routine(ev: pd.DataFrame, trades: pd.DataFrame, years: int = 3) -> pd.DataFrame:
-    """Add ``trader_class`` in {routine, opportunistic, unclassified}."""
+    """Add ``trader_class`` in {routine, opportunistic, unclassified} (vectorised).
+
+    Keys are integers: owner code * 10_000 + year, and that * 100 + month.
+    """
     hist = trades[["owner_cik", "trans_date"]].dropna()
-    hist = hist.assign(y=hist["trans_date"].dt.year, m=hist["trans_date"].dt.month)
-    years_traded = hist.groupby("owner_cik")["y"].agg(lambda s: set(s.unique()))
-    ym_traded = hist.groupby("owner_cik").apply(
-        lambda d: set(zip(d["y"], d["m"], strict=True)), include_groups=False
+    codes, uniques = pd.factorize(
+        pd.concat([hist["owner_cik"], ev["owner_cik"]], ignore_index=True).astype(str)
     )
-    cls = []
-    for cik, d in zip(ev["owner_cik"], ev["trans_date"], strict=True):
-        y, m = d.year, d.month
-        prior = [y - k for k in range(1, years + 1)]
-        ys = years_traded.get(cik, set())
-        if not all(p in ys for p in prior):
-            cls.append("unclassified")
-            continue
-        yms = ym_traded.get(cik, set())
-        cls.append("routine" if all((p, m) in yms for p in prior) else "opportunistic")
+    hc, ec = codes[: len(hist)].astype("int64"), codes[len(hist) :].astype("int64")
+    y_keys = np.unique(hc * 10_000 + hist["trans_date"].dt.year.to_numpy())
+    ym_keys = np.unique(
+        (hc * 10_000 + hist["trans_date"].dt.year.to_numpy()) * 100
+        + hist["trans_date"].dt.month.to_numpy()
+    )
+    year = ev["trans_date"].dt.year.to_numpy()
+    month = ev["trans_date"].dt.month.to_numpy()
+    classified = ec >= 0
+    routine = ec >= 0
+    for k in range(1, years + 1):
+        yk = ec * 10_000 + (year - k)
+        classified &= np.isin(yk, y_keys)
+        routine &= np.isin(yk * 100 + month, ym_keys)
+    cls = np.where(classified, np.where(routine, "routine", "opportunistic"), "unclassified")
     return ev.assign(trader_class=cls)
 
 
