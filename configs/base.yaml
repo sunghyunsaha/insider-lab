@@ -1,0 +1,73 @@
+# insider-lab configuration. Every number the backtest uses lives here.
+# Changing anything below after 2026-11-25 counts as a new trial: log it in DECISIONS.md.
+
+sec:
+  first_quarter: "2006q1"
+  last_quarter: null          # null = latest quarter the SEC has posted
+  # The SEC asks automated clients to declare who they are. Set this env var to
+  # "insider-lab <your email>" before downloading.
+  user_agent_env: SEC_USER_AGENT
+  max_requests_per_second: 5   # SEC fair-access limit is 10; stay well under it
+
+sample:
+  history_start: "2006-01-01"  # filings used to classify routine traders
+  start: "2009-01-01"          # first signal date: needs 3 years of history (H2, H5)
+  holdout_start: "2024-01-01"  # locked: not evaluated until DECISIONS.md unlocks it
+  end: null                    # null = last price date
+
+universe:
+  officer_or_director: true    # H1 population; ten-percent owners are a separate bucket
+  min_price: 5.0               # insider's reported price per share, USD
+  min_value_usd: 25000         # shares x price of the purchase
+  min_adv_usd: 1000000         # 20-day median dollar volume before entry
+  adv_window: 20
+  # Reported price vs market close on the transaction date. Larger gaps usually mean
+  # the ticker now belongs to a different company, so the event is dropped.
+  price_match_tolerance: 0.25
+  # Heuristic exclusion of funds, SPACs and BDCs by issuer name (no SIC code in the data).
+  exclude_name_regex: "\\bFUND\\b|\\bFUNDS\\b|MUNICIPAL|INCOME TRUST|ACQUISITION CORP|ACQUISITION CO\\b|\\bSPAC\\b|CAPITAL CORP|BDC|CLOSED[- ]END"
+
+signal:
+  lags: [1, 2]                 # trading days after FILING_DATE before entry (entry at close)
+  horizons: [63, 126]          # holding period in trading days (about 3 and 6 months)
+  cluster_window_days: 30      # calendar days, looking back from the filing date only
+  cluster_min_insiders: 3
+  drop_lookback: 63            # trading days of return before the trade date
+  drop_threshold: -0.20
+  large_increase: 0.10         # purchase / shares held before >= 10%
+  routine_years: 3             # CMP: traded in the same calendar month in each of the prior 3 years
+
+costs:                         # one-way, in basis points
+  commission_bps: 10           # Toss US stocks, 0.1% each way
+  fx_bps: 5                    # Toss FX with the weekday 95% preference
+  # Half-spread by 20-day median dollar volume. These are my assumptions, not measurements.
+  half_spread_bps:
+    - {min_adv_usd: 50000000, bps: 5}
+    - {min_adv_usd: 10000000, bps: 15}
+    - {min_adv_usd: 0, bps: 40}
+  sensitivity_multipliers: [0.0, 1.0, 2.0]
+
+delisting:
+  # Return applied when a price series stops before the holding period ends and before
+  # the end of the data. Free price data has no delisting codes, so mergers and failures
+  # cannot be told apart. Primary run 0%, sensitivity -30% (Shumway's convention).
+  primary_return: 0.0
+  sensitivity_return: -0.30
+
+benchmark:
+  ticker: SPY                  # total-return proxy for the TIGER S&P 500 core
+  fx_series: DEXKOUS           # FRED: KRW per USD, noon buying rate in New York
+
+evaluation:
+  cscv_blocks: 16
+  subperiods:
+    - ["2009-01-01", "2012-12-31"]
+    - ["2013-01-01", "2016-12-31"]
+    - ["2017-01-01", "2019-12-31"]
+    - ["2020-01-01", "2023-12-31"]
+  hac_lags: 10
+  alpha: 0.05
+
+prices:
+  providers: ["yfinance", "stooq"]   # tried in order; "tiingo" is used when TIINGO_API_KEY is set
+  batch_size: 100
