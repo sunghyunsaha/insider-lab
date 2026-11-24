@@ -48,6 +48,9 @@ jobs:
           python -m pip install -e . --no-deps
       - name: Reachability
         run: insiderlab data-check
+      - name: Price source check
+        if: inputs.stage == 'check'
+        run: insiderlab price-check
       - name: Restore data cache
         if: inputs.stage == 'full'
         uses: actions/cache/restore@v4
