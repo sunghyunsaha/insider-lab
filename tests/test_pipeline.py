@@ -47,3 +47,15 @@ def test_report_renders(cfg, tmp_path):
     assert (tmp_path / "figures" / "cumulative_excess.png").exists()
     data = json.loads((tmp_path / "results" / "backtest.json").read_text())
     assert data["diagnostics"]["n_trials"] == 36
+
+
+def test_every_cli_command_has_a_handler():
+    import argparse
+
+    from insiderlab import cli
+
+    src = open(cli.__file__, encoding="utf-8").read()
+    parser_cmds = {line.split('"')[1] for line in src.splitlines() if "sub.add_parser(" in line}
+    for cmd in parser_cmds:
+        assert f'"{cmd}": cmd_' in src, f"{cmd} has no handler"
+    assert isinstance(argparse.ArgumentParser(), argparse.ArgumentParser)

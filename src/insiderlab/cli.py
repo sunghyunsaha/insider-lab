@@ -255,6 +255,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     handlers = {
         "data-check": cmd_data_check,
+        "price-check": cmd_price_check,
         "fetch-sec": cmd_fetch_sec,
         "fetch-prices": cmd_fetch_prices,
         "backtest": cmd_backtest,
