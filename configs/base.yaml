@@ -69,5 +69,7 @@ evaluation:
   alpha: 0.05
 
 prices:
-  providers: ["yfinance", "stooq"]   # tried in order; "tiingo" is used when TIINGO_API_KEY is set
+  # Tried in order; "tiingo" is used first when TIINGO_API_KEY is set. Stooq removed its CSV
+  # endpoint (HTTP 404 on 2026-11-25), so it is no longer in the default list (DECISIONS D12).
+  providers: ["yfinance"]
   batch_size: 100

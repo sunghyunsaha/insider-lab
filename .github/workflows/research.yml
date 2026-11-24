@@ -1,8 +1,8 @@
 name: Research run
 
-# Started by hand (Actions tab -> Research run -> Run workflow). Downloads the SEC data
-# sets and prices on GitHub's servers, runs the pre-registered backtest and commits the
-# generated reports. Optional repository secrets:
+# Started by hand (Actions tab -> Research run -> Run workflow).
+# NOTE (2026-11-25): the SEC refuses GitHub's servers (HTTP 403), so stage=full fails at the
+# SEC step today; use scripts/run_local.ps1 on a home PC. stage=check shows reachability. Optional repository secrets:
 #   SEC_USER_AGENT  "insider-lab your@email" (the SEC asks for a contact)
 #   TIINGO_API_KEY  enables Tiingo prices, which cover more delisted companies
 

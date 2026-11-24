@@ -52,8 +52,16 @@ make data        # SEC data sets, then prices for every event ticker, SPY and US
 make backtest    # pre-registered backtest -> reports/REPORT.md and this README
 ```
 
-The cloud sandbox this was written in cannot reach sec.gov or the price hosts, so the real
-run happens in GitHub Actions (`Research run` workflow, started by hand) or on your own PC.
+**Where the real run happens.** The SEC refuses requests from GitHub's servers (HTTP 403,
+"Request Rate Threshold Exceeded", DECISIONS D11), so the data download runs on a home PC.
+On Windows one command does everything and pushes the generated reports:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Email you@example.com
+```
+
+The e-mail goes to the SEC as the contact in the User-Agent header and is never written to
+disk. GitHub Actions runs the tests, the ledger check and a reachability check.
 
 ## Prediction ledger
 
