@@ -267,6 +267,8 @@ def reachability() -> dict[str, str]:
         try:
             r = requests.get(url, headers=headers, timeout=20)
             out[name] = f"HTTP {r.status_code}, {len(r.content)} bytes"
+            if r.status_code != 200:  # show the server's stated reason
+                out[name] += " | " + " ".join(r.text.split())[:300]
         except Exception as exc:  # report, do not raise
             out[name] = f"failed: {type(exc).__name__}"
     return out
