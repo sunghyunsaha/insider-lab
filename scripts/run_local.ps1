@@ -48,6 +48,11 @@ if ($LASTEXITCODE -ne 0) { throw "fetch-sec failed; re-run the script to resume"
 
 Step "Prices and USD/KRW"
 & $cli fetch-prices
+if ($LASTEXITCODE -eq 2) {
+    Write-Host "`nPrices are not complete yet (Yahoo rate limit). Wait about an hour and run" `
+        "the same command again; it resumes where it stopped." -ForegroundColor Yellow
+    exit 2
+}
 if ($LASTEXITCODE -ne 0) { throw "fetch-prices failed; re-run the script to resume" }
 
 Step "Pre-registered backtest"

@@ -35,7 +35,9 @@ def cmd_price_check(args) -> int:
     tickers = ["SPY", "AAPL", "BRK.B", "NVDA", "TWTR"]  # TWTR: delisted 2022
     with tempfile.TemporaryDirectory() as tmp:
         cache = Path(tmp)
-        stats = prices.update_cache(tickers, cache, cfg["prices"]["providers"], "2018-01-01")
+        stats = prices.update_cache(
+            tickers, cache, cfg["prices"]["providers"], "2018-01-01", pause=0
+        )
         print(json.dumps(stats))
         panel = prices.load_panel(tickers, cache)
         for t in tickers:
@@ -93,21 +95,37 @@ def _population(cfg, p) -> pd.DataFrame:
 def cmd_fetch_prices(args) -> int:
     cfg, p = _cfg_paths(args)
     pop = _population(cfg, p)
-    tickers = sorted(set(pop["ticker"])) + [cfg["benchmark"]["ticker"]]
+    bench = cfg["benchmark"]["ticker"]
+    names = sorted(set(pop["ticker"]) - {bench})
     if args.limit:
-        tickers = tickers[: args.limit] + [cfg["benchmark"]["ticker"]]
-    print(f"fetching prices for {len(tickers):,} tickers")
+        names = names[: args.limit]
+    tickers = [bench] + names  # benchmark first: without it nothing can be evaluated
+    pc = cfg["prices"]
+    print(f"fetching prices for {len(tickers):,} tickers (cached ones are skipped)")
     stats = prices.update_cache(
         tickers,
         p.prices,
-        cfg["prices"]["providers"],
+        pc["providers"],
         cfg["sample"]["history_start"],
-        cfg["prices"]["batch_size"],
+        batch_size=pc["batch_size"],
         refresh=args.refresh,
+        retry_missing=args.retry_missing,
+        pause=pc.get("pause_seconds", 10),
+        rate_limit_sleep=pc.get("rate_limit_sleep_seconds", 300),
+        max_retries=pc.get("max_retries", 6),
     )
     print(json.dumps(stats))
     fx = prices.fetch_fx(cfg["benchmark"]["fx_series"], p.prices)
     print(f"USD/KRW {fx.index[0].date()} to {fx.index[-1].date()}, last {fx.iloc[-1]:.1f}")
+    if not (p.prices / f"{bench}.parquet").exists():
+        print(f"{bench} (benchmark) is still missing: run this step again later.")
+        return 2
+    if stats["rate_limited"]:
+        print(
+            f"{stats['rate_limited']:,} tickers are still rate-limited. Wait about an hour "
+            "and run this step again: it resumes and only fetches what is missing."
+        )
+        return 2
     return 0
 
 
@@ -176,6 +194,7 @@ def _price_lookup(p, cfg):
                 cfg["prices"]["providers"],
                 "2020-01-01",
                 refresh=True,
+                pause=0,
                 log=lambda *a: None,
             )
             cached = prices.load_panel([ticker], p.prices).get(ticker)
@@ -232,6 +251,7 @@ def main(argv=None) -> int:
     s.add_argument("--last")
     s = sub.add_parser("fetch-prices", help="prices for every event ticker, SPY and USD/KRW")
     s.add_argument("--refresh", action="store_true")
+    s.add_argument("--retry-missing", dest="retry_missing", action="store_true")
     s.add_argument("--limit", type=int, default=0)
     sub.add_parser("backtest", help="run the pre-registered backtest and write the report")
     sub.add_parser("report", help="re-render REPORT.md and README from results")

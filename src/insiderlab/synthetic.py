@@ -23,7 +23,7 @@ def make_world(
     rng = np.random.default_rng(seed)
     dates = pd.bdate_range(start, end)
     t_len = len(dates)
-    tickers = [f"T{i:03d}" for i in range(n_tickers)]
+    tickers = [f"T{chr(65 + i // 26)}{chr(65 + i % 26)}" for i in range(n_tickers)]
     mkt = rng.normal(0.0003, 0.011, t_len)
     beta = rng.uniform(1 - beta_spread, 1 + beta_spread, n_tickers)
     idio = rng.normal(0.0, 0.02, (t_len, n_tickers))

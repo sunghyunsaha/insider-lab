@@ -49,22 +49,51 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     return df[df["adj_close"].notna() & (df["adj_close"] > 0)]
 
 
-def fetch_yfinance(tickers: list[str], start: str) -> dict[str, pd.DataFrame]:
+class _LogCapture:
+    """Collect yfinance log messages so a rate limit can be detected without internals."""
+
+    def __init__(self):
+        import logging
+
+        self.messages: list[str] = []
+        self.handler = logging.Handler()
+        self.handler.emit = lambda record: self.messages.append(record.getMessage())
+        self.logger = logging.getLogger("yfinance")
+
+    def __enter__(self):
+        self.logger.addHandler(self.handler)
+        return self
+
+    def __exit__(self, *exc):
+        self.logger.removeHandler(self.handler)
+
+    @property
+    def rate_limited(self) -> bool:
+        text = " ".join(self.messages)
+        return any(k in text for k in RATE_LIMIT_MARKERS)
+
+
+RATE_LIMIT_MARKERS = ("RateLimit", "Rate limited", "Too Many Requests", "HTTP 429")
+
+
+def fetch_yfinance(tickers: list[str], start: str) -> tuple[dict[str, pd.DataFrame], bool]:
+    """Returns the frames it got and whether Yahoo rate-limited the request."""
     import yfinance as yf
 
     symbols = {yahoo_symbol(t): t for t in tickers}
-    raw = yf.download(
-        list(symbols),
-        start=start,
-        auto_adjust=False,
-        actions=True,
-        group_by="ticker",
-        threads=True,
-        progress=False,
-    )
+    with _LogCapture() as cap:
+        raw = yf.download(
+            list(symbols),
+            start=start,
+            auto_adjust=False,
+            actions=True,
+            group_by="ticker",
+            threads=False,
+            progress=False,
+        )
     out: dict[str, pd.DataFrame] = {}
     if raw is None or raw.empty:
-        return out
+        return out, cap.rate_limited
     for sym, t in symbols.items():
         try:
             sub = raw[sym] if isinstance(raw.columns, pd.MultiIndex) else raw
@@ -84,7 +113,7 @@ def fetch_yfinance(tickers: list[str], start: str) -> dict[str, pd.DataFrame]:
         df = _clean(df)
         if len(df):
             out[t] = df
-    return out
+    return out, cap.rate_limited
 
 
 def fetch_stooq(tickers: list[str], start: str, pause: float = 0.5) -> dict[str, pd.DataFrame]:
@@ -151,51 +180,84 @@ def update_cache(
     cache: Path,
     providers: list[str],
     start: str,
-    batch_size: int = 100,
+    batch_size: int = 50,
     refresh: bool = False,
+    retry_missing: bool = False,
+    pause: float = 10.0,
+    rate_limit_sleep: float = 300.0,
+    max_retries: int = 6,
     log=print,
+    sleep=time.sleep,
+    fetchers: dict | None = None,
 ) -> dict[str, int]:
-    """Fetch every ticker not yet cached (or all, with ``refresh``)."""
+    """Fetch every ticker not yet cached, pacing requests and backing off on rate limits.
+
+    ``_missing.json`` maps ticker -> reason. Only ``not_found`` (the provider answered but
+    had no data, typically a delisted company) is skipped on later runs; anything else,
+    including rate-limited tickers and entries from older versions, is retried.
+    Order is preserved, so put the benchmark first.
+    """
     cache.mkdir(parents=True, exist_ok=True)
     missing_path = cache / "_missing.json"
     missing = json.loads(missing_path.read_text()) if missing_path.exists() else {}
-    todo = sorted({t for t in tickers if refresh or not (cache / f"{t}.parquet").exists()})
-    if not refresh:
-        todo = [t for t in todo if t not in missing]
+    seen, todo = set(), []
+    for t in tickers:
+        if t in seen:
+            continue
+        seen.add(t)
+        if not refresh and (cache / f"{t}.parquet").exists():
+            continue
+        if not (refresh or retry_missing) and missing.get(t) == "not_found":
+            continue
+        todo.append(t)
     token = os.environ.get("TIINGO_API_KEY", "").strip()
     order = (["tiingo"] if token else []) + [p for p in providers if p != "tiingo"]
-    stats = {"requested": len(todo), "fetched": 0, "missing": 0}
+    fetchers = fetchers or {
+        "yfinance": fetch_yfinance,
+        "stooq": lambda ts, st: (fetch_stooq(ts, st), False),
+        "tiingo": lambda ts, st: (fetch_tiingo(ts, st, token), False),
+    }
+    stats = {"requested": len(todo), "fetched": 0, "not_found": 0, "rate_limited": 0, "backoffs": 0}
     for i in range(0, len(todo), batch_size):
         batch = todo[i : i + batch_size]
-        left = list(batch)
+        left, limited = list(batch), False
         for prov in order:
             if not left:
                 break
-            try:
-                if prov == "yfinance":
-                    got = fetch_yfinance(left, start)
-                elif prov == "stooq":
-                    got = fetch_stooq(left, start)
-                elif prov == "tiingo":
-                    got = fetch_tiingo(left, start, token)
-                else:
-                    raise ValueError(f"unknown provider {prov}")
-            except Exception as exc:  # a provider outage must not stop the run
-                log(f"  {prov} failed on a batch: {type(exc).__name__}: {exc}")
-                got = {}
-            for t, df in got.items():
-                df.attrs["source"] = prov
-                df.assign(source=prov).to_parquet(cache / f"{t}.parquet")
-            left = [t for t in left if t not in got]
-            stats["fetched"] += len(got)
+            attempts = 0
+            while left:
+                try:
+                    got, limited = fetchers[prov](left, start)
+                except Exception as exc:  # a provider outage must not stop the run
+                    log(f"  {prov} failed on a batch: {type(exc).__name__}: {exc}")
+                    got, limited = {}, False
+                for t, df in got.items():
+                    df.assign(source=prov).to_parquet(cache / f"{t}.parquet")
+                    missing.pop(t, None)
+                stats["fetched"] += len(got)
+                left = [t for t in left if t not in got]
+                if not (limited and left and attempts < max_retries):
+                    break
+                wait = min(rate_limit_sleep * 2**attempts, 3600)
+                attempts += 1
+                stats["backoffs"] += 1
+                log(
+                    f"  {prov} rate limit: waiting {wait / 60:.0f} min, then retrying "
+                    f"{len(left)} tickers (attempt {attempts}/{max_retries})"
+                )
+                sleep(wait)
+            if limited and left:
+                break  # do not fall through to another provider and label these missing
         for t in left:
-            missing[t] = "no provider returned data"
-        stats["missing"] += len(left)
-        log(
-            f"  prices {min(i + batch_size, len(todo))}/{len(todo)}: "
-            f"{stats['fetched']} fetched, {stats['missing']} missing"
-        )
+            missing[t] = "rate_limited" if limited else "not_found"
+        stats["rate_limited" if limited else "not_found"] += len(left)
         missing_path.write_text(json.dumps(missing, indent=0, sort_keys=True))
+        log(
+            f"  prices {min(i + batch_size, len(todo))}/{len(todo)}: {stats['fetched']} "
+            f"fetched, {stats['not_found']} not found, {stats['rate_limited']} rate-limited"
+        )
+        if i + batch_size < len(todo):
+            sleep(pause)
     return stats
 
 

@@ -27,6 +27,25 @@ NON_COMMON = re.compile(
 )
 
 
+TICKER_OK = re.compile(r"^[A-Z]{1,5}([.-][A-Z]{1,2})?$")
+NOT_TICKERS = {"NONE", "NA", "N.A", "N-A", "N", "NULL", "TBD"}
+
+
+def clean_ticker(raw: str) -> str:
+    """Normalise the issuer's self-reported ticker: '(AIG)' -> 'AIG', "BF'B" -> 'BF.B'.
+
+    Returns '' when the result does not look like a US ticker (e.g. '--', '* BTC',
+    'N/A', several tickers in one field).
+    """
+    t = str(raw or "").upper().strip()
+    t = re.sub(r"[()\[\]`*\s]", "", t)
+    t = t.replace("'", ".").replace("/", ".")
+    t = t.split(";")[0].split(",")[0]
+    if t in NOT_TICKERS or not TICKER_OK.match(t):
+        return ""
+    return t
+
+
 def open_market_trades(tx: pd.DataFrame) -> pd.DataFrame:
     """Open-market purchases (P) and sales (S) on original Form 4 filings, common stock only."""
     df = tx[(tx["form"] == "4") & tx["code"].isin(["P", "S"])].copy()
@@ -71,7 +90,8 @@ def purchase_events(tx: pd.DataFrame, signal: dict | None = None) -> pd.DataFram
     before = ev["owned_after"] - ev["shares"]
     ev["frac_increase"] = np.where(before > 0, ev["shares"] / before.where(before > 0), np.inf)
     ev["filing_lag_days"] = (ev["filing_date"] - ev["trans_date_last"]).dt.days
-    ev = ev[ev["ticker"].str.len().between(1, 6) & ~ev["ticker"].isin(["NONE", "N/A", "NA"])]
+    ev["ticker"] = ev["ticker"].map(clean_ticker)
+    ev = ev[ev["ticker"] != ""]
     ev = classify_routine(ev, trades, signal.get("routine_years", 3))
     ev = add_clusters(ev, signal.get("cluster_window_days", 30))
     return ev.sort_values(["filing_date", "accession"]).reset_index(drop=True)

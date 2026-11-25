@@ -72,4 +72,9 @@ prices:
   # Tried in order; "tiingo" is used first when TIINGO_API_KEY is set. Stooq removed its CSV
   # endpoint (HTTP 404 on 2026-11-25), so it is no longer in the default list (DECISIONS D12).
   providers: ["yfinance"]
-  batch_size: 100
+  batch_size: 50
+  # Yahoo rate-limited the first full run after about 2,900 tickers in 13 minutes
+  # (2026-11-26). Pace requests and back off instead (DECISIONS D13).
+  pause_seconds: 10
+  rate_limit_sleep_seconds: 300
+  max_retries: 6
