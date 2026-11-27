@@ -40,11 +40,10 @@ class Market:
     no_split_info: set[str]
 
     def col(self, ticker: str) -> int | None:
-        try:
-            return self._col[ticker]
-        except AttributeError:
+        """Column of ``ticker``, or None when it has no prices."""
+        if not hasattr(self, "_col"):
             self._col = {t: i for i, t in enumerate(self.tickers)}
-            return self._col.get(ticker)
+        return self._col.get(ticker)
 
 
 def build_market(
@@ -115,7 +114,8 @@ def attach_price_features(ev: pd.DataFrame, mkt: Market, cfg: dict) -> tuple[pd.
         close = float(raw.get(dates[ti], np.nan)) if raw is not None else np.nan
         ok.append(price_matches(close, price, u["price_match_tolerance"], t in mkt.no_split_info))
         lo = max(0, fi - w + 1)
-        adv.append(np.nanmedian(mkt.dollar_volume[lo : fi + 1, k]) if fi >= lo else np.nan)
+        seg_dv = mkt.dollar_volume[lo : fi + 1, k]
+        adv.append(float(np.nanmedian(seg_dv)) if np.isfinite(seg_dv).any() else np.nan)
         if ti - look >= mkt.first_valid[k] and mkt.first_valid[k] >= 0:
             seg = mkt.returns[ti - look + 1 : ti + 1, k]
             dd.append(

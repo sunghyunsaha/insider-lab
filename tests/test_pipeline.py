@@ -59,3 +59,31 @@ def test_every_cli_command_has_a_handler():
     for cmd in parser_cmds:
         assert f'"{cmd}": cmd_' in src, f"{cmd} has no handler"
     assert isinstance(argparse.ArgumentParser(), argparse.ArgumentParser)
+
+
+def test_events_without_usable_prices_are_dropped_not_fatal(cfg):
+    """Real data: about half the event tickers have no prices, some have one row only."""
+    import numpy as np
+    import pandas as pd
+
+    w = make_world(seed=5, drift_daily=0.0005, n_tickers=80, n_insiders=300)
+    panel = dict(w["panel"])
+    names = sorted(panel)
+    for t in names[::2]:  # half the tickers: no price history at all
+        del panel[t]
+    stub = names[1]
+    panel[stub] = panel[stub].iloc[:1]  # a single row: unusable
+    split_t = names[3]  # a 2-for-1 split in Yahoo's split-adjusted format
+    df = panel[split_t].copy()
+    mid = df.index[len(df) // 2]
+    df.loc[df.index < mid, ["close", "adj_close"]] /= 2
+    df.loc[mid, "split"] = 2.0
+    df["source"] = "yfinance"
+    panel[split_t] = df
+    res = pipeline.run(w["tx"], panel, w["bench"], w["fx"], cfg, "synthetic", log=lambda *a: None)
+    f = res["funnel"]
+    assert f["price_has_prices"] < f["price_inside_price_calendar"]
+    assert f["in_sample_events"] > 0
+    assert np.isfinite(res["diagnostics"]["dsr"])
+    assert isinstance(res["hypotheses"][0]["t_hac"], float)
+    assert pd.Timestamp(res["sample"]["end"]) < pd.Timestamp("2024-01-01")
